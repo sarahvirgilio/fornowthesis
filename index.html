@@ -2361,6 +2361,8 @@ const dataFolders = [
   {id:"drafts", name:"Drafts"},
   {id:"sent", name:"Sent"},
   {id:"trash", name:"Trash"},
+  {divider:true},
+  {id:"archive", name:"Archive"},
 ];
 
 
@@ -2576,27 +2578,81 @@ document.addEventListener("keydown", function(e){
 });
 
 // ============================================================
-// GOOGLE SHEETS INTEGRATION
-// Replace the URL below with your deployed Apps Script Web App URL
+// JSONBIN INTEGRATION — saves + loads all responses from cloud
 // ============================================================
-const SHEETS_URL = "https://script.google.com/macros/s/AKfycbwCIBuo7bFGy4uXs9w8rsLoj50uLQ0jM4cS4QQhxX4A_C9ziWQN2ZEzFQze38CV-0DDIQ/exec";
+const JSONBIN_ID  = "69b1eb37aa77b81da9d8b491";
+const JSONBIN_KEY = "$2a$10$HQsfjswa/72/8ohdJ03fEOoSNWZSpjb3AWMx9XQ646rJuJ76Vr6A2";
+const JSONBIN_URL = `https://api.jsonbin.io/v3/b/${JSONBIN_ID}`;
 
-function sendToSheets(prompt, response, action) {
-  if (!SHEETS_URL || SHEETS_URL === "YOUR_APPS_SCRIPT_URL_HERE") return;
+// Load past responses from JSONBin and inject them as readable emails in the Archive folder
+async function loadCommunityResponses() {
   try {
-    const params = new URLSearchParams({
-      prompt: prompt || "",
-      response: response || "",
-      action: action || "",
-      sessionId: String(SESSION_ID || "")
+    const res = await fetch(JSONBIN_URL + "/latest", {
+      headers: { "X-Access-Key": JSONBIN_KEY }
     });
-    fetch(SHEETS_URL, {
-      method: "POST",
-      mode: "no-cors",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: params.toString()
-    }).catch(()=>{});
+    const json = await res.json();
+    const entries = Array.isArray(json.record) ? json.record : [];
+    entries.forEach((entry, i) => {
+      if (!entry || entry.init) return; // skip placeholder
+      const id = "community_" + i;
+      if (messages.find(m => m.id === id)) return;
+      messages.push({
+        id,
+        folder: "archive",
+        visible: true,
+        unread: false,
+        revealedAt: Date.now(),
+        shownTime: entry.timestamp || "Earlier",
+        from: "Anonymous",
+        label: "RESPONSE",
+        subject: entry.prompt || "Response",
+        body: [entry.response || ""],
+        editable: false,
+        prompt: false
+      });
+    });
+    renderFolders();
+    renderMessages();
   } catch(e) {}
+}
+
+// Save a new response to JSONBin
+async function sendToJsonBin(prompt, response, action) {
+  try {
+    // First read current data
+    const getRes = await fetch(JSONBIN_URL + "/latest", {
+      headers: { "X-Access-Key": JSONBIN_KEY }
+    });
+    const json = await getRes.json();
+    let entries = Array.isArray(json.record) ? json.record : [];
+
+    // Filter out the init placeholder
+    entries = entries.filter(e => e && !e.init);
+
+    // Add the new entry
+    entries.push({
+      prompt:    prompt    || "",
+      response:  response  || "",
+      action:    action    || "",
+      sessionId: String(SESSION_ID || ""),
+      timestamp: new Date().toLocaleString("en-US", { timeZone: "America/New_York" })
+    });
+
+    // Write back
+    await fetch(JSONBIN_URL, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Access-Key": JSONBIN_KEY
+      },
+      body: JSON.stringify(entries)
+    });
+  } catch(e) {}
+}
+
+// Alias so existing button handlers still work
+function sendToSheets(prompt, response, action) {
+  sendToJsonBin(prompt, response, action);
 }
 
 
@@ -3328,6 +3384,9 @@ function updateLiveClock(){
 updateLiveClock();
 updateStatusBar();
 setInterval(()=>{updateLiveClock(); updateStatusBar();}, 1000);
+
+// Load past community responses from JSONBin on startup
+loadCommunityResponses();
 
 // Help dropdown
 (function(){
